@@ -28,6 +28,8 @@ import { MessagingModule } from './common/messaging.module';
 import { AuthController } from './auth/auth.controller';
 import { CartModule } from './cart/cart.module';
 import { OrdersModule } from './orders/orders.module';
+import { ProvidersModule } from './providers/providers.module';
+import { ProvidersController } from './admin/providers.controller';
 
 @Module({
   imports: [
@@ -60,6 +62,7 @@ import { OrdersModule } from './orders/orders.module';
     MessagingModule,
     OrdersModule,
     CartModule,
+    ProvidersModule
   ],
   controllers: [
     HealthController,
@@ -69,7 +72,8 @@ import { OrdersModule } from './orders/orders.module';
     StoreController,
     UsersController,
     CategoriesController,
-    AuthController
+    AuthController,
+    ProvidersController,
   ],
   providers: [
     PrismaHealthIndicator,

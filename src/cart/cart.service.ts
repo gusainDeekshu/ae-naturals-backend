@@ -1,5 +1,10 @@
 // src/cart/cart.service.ts
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+  Logger,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppCacheService } from '../common/cache/cache.service';
 
@@ -12,40 +17,56 @@ export class CartService {
     private cache: AppCacheService,
   ) {}
 
-  private getCacheKey(userId: string) { return `cart:${userId}`; }
+  private getCacheKey(userId: string) {
+    return `cart:${userId}`;
+  }
 
   // src/cart/cart.service.ts (Backend)
 
-async getCart(userId: string) {
-  return await this.cache.getOrSet(this.getCacheKey(userId), async () => {
-    return await this.prisma.cart.findUnique({
-      where: { userId },
-      include: { 
-        items: { 
-          include: { 
-            product: true // This ensures storeId is available to the frontend
-          } 
-        } 
-      },
-    });
-  }, 3600);
-}
+  async getCart(userId: string) {
+    return await this.cache.getOrSet(
+      this.getCacheKey(userId),
+      async () => {
+        // Attempt to find the cart
+        let cart = await this.prisma.cart.findUnique({
+          where: { userId },
+          include: {
+            items: { include: { product: true } },
+          },
+        });
 
-  async addToCart(userId: string, productId: string, quantity: number) {
-  const cart = await this.getCart(userId);
-  
-  // 1. Add a safety check to resolve TS18047
-  if (!cart) {
-    throw new BadRequestException('Could not retrieve or create a cart for this user.');
+        // 🔥 If no cart exists, create one immediately
+        if (!cart) {
+          cart = await this.prisma.cart.create({
+            data: { userId },
+            include: {
+              items: { include: { product: true } },
+            },
+          });
+        }
+
+        return cart;
+      },
+      3600,
+    );
   }
 
-  const product = await this.prisma.product.findUnique({ where: { id: productId }});
+  async addToCart(userId: string, productId: string, quantity: number) {
+  // This will now either return an existing cart OR a newly created one
+  const cart = await this.getCart(userId);
   
+  // Find product to get the current price
+  const product = await this.prisma.product.findUnique({ where: { id: productId }});
   if (!product) throw new NotFoundException('Product not found');
 
+  // Upsert the item
   const result = await this.prisma.cartItem.upsert({
-    // 2. 'cart.id' is now guaranteed to be a string here
-    where: { cartId_productId: { cartId: cart.id, productId } },
+    where: { 
+      cartId_productId: { 
+        cartId: cart.id, // Now safe to use
+        productId 
+      } 
+    },
     update: { quantity: { increment: quantity } },
     create: { 
       cartId: cart.id, 
@@ -57,7 +78,7 @@ async getCart(userId: string) {
 
   await this.cache.del(this.getCacheKey(userId));
   return result;
-}                                                                                                                                                                                                                                                                                                                                                                       
+}
 
   async updateQuantity(userId: string, productId: string, quantity: number) {
     const cart = await this.prisma.cart.findUnique({ where: { userId } });
@@ -67,7 +88,7 @@ async getCart(userId: string) {
 
     const result = await this.prisma.cartItem.update({
       where: { cartId_productId: { cartId: cart.id, productId } },
-      data: { quantity }
+      data: { quantity },
     });
 
     await this.cache.del(this.getCacheKey(userId));
@@ -77,8 +98,8 @@ async getCart(userId: string) {
   async removeItem(userId: string, productId: string) {
     const cart = await this.prisma.cart.findUnique({ where: { userId } });
     if (cart) {
-      await this.prisma.cartItem.delete({ 
-        where: { cartId_productId: { cartId: cart.id, productId } } 
+      await this.prisma.cartItem.delete({
+        where: { cartId_productId: { cartId: cart.id, productId } },
       });
       await this.cache.del(this.getCacheKey(userId));
     }

@@ -14,6 +14,12 @@ enum Role {
   USER
 }
 
+enum ProviderType {
+  EMAIL
+  SMS
+  PAYMENT
+}
+
 enum PaymentProvider {
   STRIPE
   RAZORPAY
@@ -208,3 +214,25 @@ model CartItem {
 }
 
 
+model ProviderConfig {
+  id        String       @id @default(cuid())
+  type      ProviderType
+  provider  String       // e.g., "SMTP", "AWS_SES", "FAST2SMS", "RAZORPAY"
+  isActive  Boolean      @default(false)
+  priority  Int          @default(1) // 1 is highest priority
+  config    String       @db.Text // Store ENCRYPTED stringified JSON
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@unique([type, provider])
+}
+
+model NotificationLog {
+  id        String   @id @default(cuid())
+  type      String   // "EMAIL", "SMS"
+  provider  String
+  recipient String
+  status    String   // "SUCCESS", "FAILED"
+  error     String?  @db.Text
+  createdAt DateTime @default(now())
+}

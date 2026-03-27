@@ -16,31 +16,44 @@ import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 
 @ApiTags('Auth')
-@Controller('api/v1/auth')
+@Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('refresh')
   @ApiOperation({ summary: 'Refresh access token using HTTP-only cookie' })
   @ApiResponse({ status: 200, description: 'Token refreshed successfully.' })
-  @ApiResponse({ status: 401, description: 'Unauthorized - Invalid or missing refresh token.' })
-  async refresh(@Request() req: express.Request) {
-    return this.authService.refreshTokens(req);
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - Invalid or missing refresh token.',
+  })
+  async refresh(
+    @Request() req: express.Request,
+    @Res({ passthrough: true }) res: express.Response,
+  ) {
+    console.log(`Refresh token request received. Cookies:`, req.cookies); // Debug log for cookies
+    return this.authService.refreshTokens(req, res);
   }
 
   @Get('me')
   @ApiOperation({ summary: 'Get current user profile from refresh token' })
-  @ApiResponse({ status: 200, description: 'Returns user profile and new access token.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns user profile and new access token.',
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized - No valid session.' })
   async getProfile(@Request() req: express.Request) {
     try {
+      console.log(`Attempting to get profile. Cookies:`, req.cookies); // Debug log for cookies
+
       const refreshToken = req.cookies?.refresh_token;
 
       if (!refreshToken) {
         throw new UnauthorizedException('No refresh token');
       }
 
-      const { user, access_token } = await this.authService.getUserFromRefreshToken(refreshToken);
+      const { user, access_token } =
+        await this.authService.getUserFromRefreshToken(refreshToken);
 
       return { user, access_token };
     } catch (err) {
@@ -73,20 +86,31 @@ export class AuthController {
   @ApiOperation({ summary: 'Send a 6-digit OTP to email or phone' })
   @ApiBody({ type: SendOtpDto })
   @ApiResponse({ status: 201, description: 'OTP sent successfully.' })
-  @ApiResponse({ status: 400, description: 'Bad Request - Invalid input data.' })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad Request - Invalid input data.',
+  })
   async sendOtp(@Body() body: SendOtpDto) {
     return this.authService.sendOtp(body.identifier, body.type);
   }
 
-  @Post('verify-otp')
+  @Post('verify-otp') // This maps to POST /auth/verify-otp
   @ApiOperation({ summary: 'Verify OTP and authenticate user' })
   @ApiBody({ type: VerifyOtpDto })
-  @ApiResponse({ status: 200, description: 'OTP verified, returns access token and sets refresh cookie.' })
-  @ApiResponse({ status: 401, description: 'Unauthorized - Invalid or expired OTP.' })
+  @ApiResponse({
+    status: 200,
+    description: 'OTP verified, returns access token and sets refresh cookie.',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - Invalid or expired OTP.',
+  })
   async verifyOtp(
     @Body() body: VerifyOtpDto,
     @Res({ passthrough: true }) res: express.Response,
   ) {
+    // Log for debugging
+    console.log(`Verifying OTP for: ${body.identifier}`);
     return this.authService.verifyOtp(res, body.identifier, body.otp);
   }
 }
