@@ -118,6 +118,7 @@ export class AuthService {
       : identifier.trim();
 
     const otp = crypto.randomInt(100000, 1000000).toString();
+    console.log(`Generated OTP for ${cleanIdentifier}: ${otp}`); // Debug log for generated OTP
     const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
     const expiryMinutes = this.config.get<number>('OTP_EXPIRY_MINUTES') || 5;
     const expires = new Date(Date.now() + expiryMinutes * 60 * 1000);
@@ -135,21 +136,21 @@ export class AuthService {
     
     const message = `Your Flower Fairy Login OTP is ${otp}. It expires in ${expiryMinutes} minutes.`;
     
-    try {
-      if (type === 'phone') {
-        await this.smsService.sendSMS(cleanIdentifier, message);
-      } else {
-        const html = `<div style="font-family: Arial, sans-serif; padding: 20px;">
-                        <h2>Flower Fairy Login</h2>
-                        <p>Your OTP is <strong style="font-size: 24px;">${otp}</strong>.</p>
-                        <p>It expires in ${expiryMinutes} minutes.</p>
-                      </div>`;
-        await this.emailService.sendEmail(cleanIdentifier, 'Your Flower Fairy Login OTP', html);
-      }
-    } catch (error) {
-      this.logger.error(`Failed to send OTP to ${cleanIdentifier}: ${error.message}`);
-      throw new BadRequestException('Failed to send OTP. Please check your details and try again.');
-    }
+    // try {
+    //   if (type === 'phone') {
+    //     await this.smsService.sendSMS(cleanIdentifier, message);
+    //   } else {
+    //     const html = `<div style="font-family: Arial, sans-serif; padding: 20px;">
+    //                     <h2>Flower Fairy Login</h2>
+    //                     <p>Your OTP is <strong style="font-size: 24px;">${otp}</strong>.</p>
+    //                     <p>It expires in ${expiryMinutes} minutes.</p>
+    //                   </div>`;
+    //     await this.emailService.sendEmail(cleanIdentifier, 'Your Flower Fairy Login OTP', html);
+    //   }
+    // } catch (error) {
+    //   this.logger.error(`Failed to send OTP to ${cleanIdentifier}: ${error.message}`);
+    //   throw new BadRequestException('Failed to send OTP. Please check your details and try again.');
+    // }
 
     return { message: 'OTP sent successfully' };
   }

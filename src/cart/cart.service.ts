@@ -24,6 +24,7 @@ export class CartService {
   // src/cart/cart.service.ts (Backend)
 
   async getCart(userId: string) {
+    console.log(`Fetching cart for user ${userId} from cache/database...`);
     return await this.cache.getOrSet(
       this.getCacheKey(userId),
       async () => {
