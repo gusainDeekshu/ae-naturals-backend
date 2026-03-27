@@ -14,6 +14,8 @@ import * as express from 'express';
 import { AuthService } from './auth.service';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { CompleteProfileDto } from './dto/complete-profile.dto';
+import { VerifyPhoneOtpDto } from './dto/verify-phone-otp.dto';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -94,23 +96,41 @@ export class AuthController {
     return this.authService.sendOtp(body.identifier, body.type);
   }
 
-  @Post('verify-otp') // This maps to POST /auth/verify-otp
-  @ApiOperation({ summary: 'Verify OTP and authenticate user' })
+ @Post('verify-otp')
+  @ApiOperation({ summary: 'Verify initial OTP (Email or Phone)' })
   @ApiBody({ type: VerifyOtpDto })
-  @ApiResponse({
-    status: 200,
-    description: 'OTP verified, returns access token and sets refresh cookie.',
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Unauthorized - Invalid or expired OTP.',
-  })
   async verifyOtp(
     @Body() body: VerifyOtpDto,
     @Res({ passthrough: true }) res: express.Response,
   ) {
-    // Log for debugging
-    console.log(`Verifying OTP for: ${body.identifier}`);
     return this.authService.verifyOtp(res, body.identifier, body.otp);
   }
+
+
+  @Post('verify-phone-otp')
+  @ApiOperation({ summary: 'Verify Phone OTP & Create/Update User (Temp Flow)' })
+  @ApiBody({ type: VerifyPhoneOtpDto })
+  async verifyPhoneOtp(
+    @Body() body: VerifyPhoneOtpDto,
+    @Res({ passthrough: true }) res: express.Response,
+  ) {
+    return this.authService.verifyPhoneOtp(res, body.tempToken, body.phone, body.otp);
+  }
+
+  @Post('complete-profile')
+  @ApiOperation({ summary: 'Link phone number to an email-only account' })
+  @ApiBody({ type: CompleteProfileDto })
+  async completeProfile(
+    @Body() body: CompleteProfileDto,
+    @Res({ passthrough: true }) res: express.Response,
+  ) {
+    return this.authService.completeProfile(
+      res,
+      body.phone,
+      body.otp,
+      body.tempToken,
+    );
+  }
 }
+
+  

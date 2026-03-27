@@ -44,8 +44,7 @@ enum Gender {
 model User {
   id        String     @id @default(cuid())
   email     String?    @unique // Changed to optional for phone-only users
-  phone     String?    @unique // Added for mobile authentication
-  password  String
+  phone     String     @unique // Added for mobile authentication
   name      String
   gender    Gender?
   role      Role       @default(USER)

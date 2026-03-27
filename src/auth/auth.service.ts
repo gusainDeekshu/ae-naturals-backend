@@ -80,13 +80,13 @@ export class AuthService {
   /**
    * Standard Email/Password login
    */
-  async login(email: string, pass: string) {
+  async login(email: string) {
     const cleanEmail = email.toLowerCase().trim();
     const user = await this.prisma.user.findUnique({
       where: { email: cleanEmail },
     });
 
-    if (!user || !(await bcrypt.compare(pass, user.password))) {
+    if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -211,100 +211,264 @@ export class AuthService {
 
   async verifyOtp(res: Response, identifier: string, otp: string) {
     try {
-      console.log('🔍 Incoming verifyOtp request');
-      console.log('Identifier:', identifier);
-      console.log('OTP:', otp);
-
-      // 🔥 FIX 1: MUST EXACTLY MATCH `sendOtp` NORMALIZATION
-      // If it's a phone number, strip all non-numeric characters (spaces, dashes, +)
       const cleanIdentifier = identifier.includes('@')
         ? identifier.toLowerCase().trim()
         : identifier.replace(/\D/g, '');
 
-      console.log('✅ Clean Identifier:', cleanIdentifier);
-
       const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
-      console.log('🔐 Hashed OTP:', hashedOtp);
 
-      // 🔥 FIX 2: Check if ANY record exists for this identifier first
-      // This tells us if the user actually requested an OTP before verifying
+      // 1. Verify OTP Record
       const record = await this.prisma.verificationToken.findFirst({
         where: { identifier: cleanIdentifier },
       });
 
-      console.log('📦 DB Record Found for Identifier:', record ? 'Yes' : 'No');
-
-      if (!record) {
-        console.error(
-          '❌ No OTP was requested, or it expired and was deleted.',
-        );
-        throw new UnauthorizedException(
-          'No active OTP found. Please request a new one.',
-        );
+      if (
+        !record ||
+        record.expires < new Date() ||
+        record.token !== hashedOtp
+      ) {
+        if (record && record.expires < new Date()) {
+          await this.prisma.verificationToken.deleteMany({
+            where: { identifier: cleanIdentifier },
+          });
+        }
+        throw new UnauthorizedException('Invalid or expired OTP.');
       }
 
-      // 🔥 FIX 3: Check Expiration
-      if (record.expires < new Date()) {
-        console.error('⏰ OTP expired at:', record.expires);
-        // Clean up the expired token
-        await this.prisma.verificationToken.deleteMany({
-          where: { identifier: cleanIdentifier },
-        });
-        throw new UnauthorizedException(
-          'OTP has expired. Please request a new one.',
-        );
-      }
-
-      // 🔥 FIX 4: Actually compare the hashes
-      if (record.token !== hashedOtp) {
-        console.error('❌ OTP mismatch. User entered wrong code.');
-        throw new UnauthorizedException('Invalid OTP code. Please try again.');
-      }
-
-      console.log('✅ OTP is valid');
-
-      // Clean up used OTP so it cannot be used again
+      // 2. Clear verified OTP
       await this.prisma.verificationToken.deleteMany({
         where: { identifier: cleanIdentifier },
       });
 
-      console.log('🗑️ Deleted OTP records for identifier');
+      // 🔥 3. EMAIL FLOW (Strict checking, NO immediate creation)
+      const isEmailLogin = cleanIdentifier.includes('@');
 
+      if (isEmailLogin) {
+        console.log('📧 Email OTP verified → checking user');
+
+        const existingUser = await this.prisma.user.findUnique({
+          where: { email: cleanIdentifier },
+        });
+
+        // If user exists
+        // If user exists
+        if (existingUser) {
+          console.log("👤 Existing user found:", existingUser.id);
+
+          try {
+            // Needs phone link (Legacy support)
+            if (!existingUser.phone) {
+              console.log("⚠️ Phone missing → temp flow");
+              const tempToken = await this.jwtService.signAsync(
+                { sub: existingUser.id, email: existingUser.email, isTempFlow: true },
+                { expiresIn: '15m' }
+              );
+              return { requiresPhone: true, tempToken };
+            }
+
+            // Fully valid existing user -> Login
+            await this.prisma.user.update({
+              where: { id: existingUser.id },
+              data: { lastLogin: new Date() },
+            });
+            return await this.issueTokens(res, existingUser.id, existingUser.email, existingUser.role);
+          } catch (internalError) {
+            console.error("❌ Critical Error during user login sequence:", internalError);
+            throw internalError;
+          }
+        }
+
+        // Completely new email user -> Temp Flow (NO DB WRITE YET)
+        console.log('🆕 New email user → temp flow');
+        const tempToken = await this.jwtService.signAsync(
+          { email: cleanIdentifier, isTempFlow: true },
+          { expiresIn: '15m' },
+        );
+
+        return { requiresPhone: true, tempToken };
+      }
+
+      // 🔥 4. PHONE FLOW (Direct Login/Create)
+      // If they logged in with phone, we already have their phone number, so we can safely upsert.
+      console.log('📱 Phone OTP verified → processing direct login');
       const user = await this.prisma.user.upsert({
-        where: cleanIdentifier.includes('@')
-          ? { email: cleanIdentifier }
-          : { phone: cleanIdentifier },
+        where: { phone: cleanIdentifier },
         update: { lastLogin: new Date() },
         create: {
-          email: cleanIdentifier.includes('@') ? cleanIdentifier : null,
-          phone: cleanIdentifier.includes('@') ? null : cleanIdentifier,
-          name: cleanIdentifier.includes('@')
-            ? cleanIdentifier.split('@')[0]
-            : cleanIdentifier,
+          phone: cleanIdentifier,
+          name: cleanIdentifier, // Fallback name
           role: 'USER',
-          password: '',
         },
       });
 
-      console.log('👤 User Upserted:', user.id);
-
-      // 🔥 GENERATE SESSION
-      const tokens = await this.issueTokens(
-        res,
-        user.id,
-        user.email,
-        user.role,
-      );
-
-      console.log('🎟️ Tokens Issued Successfully');
-
-      return tokens;
+      return await this.issueTokens(res, user.id, user.email, user.role);
     } catch (error) {
-      console.error('🔥 verifyOtp ERROR:', error.message);
-
       throw new UnauthorizedException(
         error?.message || 'OTP verification failed',
       );
+    }
+  }
+
+  /**
+   * Completes the profile by linking a phone number after initial email login
+   */
+  async verifyPhoneOtp(
+    res: Response,
+    tempToken: string,
+    phone: string,
+    otp: string,
+  ) {
+    try {
+      // 1. Validate Temp Token
+      let payload;
+      try {
+        payload = await this.jwtService.verifyAsync(tempToken);
+        if (!payload.isTempFlow) {
+          throw new UnauthorizedException('Invalid flow type');
+        }
+      } catch (err) {
+        throw new UnauthorizedException(
+          'Temporary session expired. Please restart login.',
+        );
+      }
+
+      const cleanPhone = phone.replace(/\D/g, '');
+      const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
+
+      // 2. Validate Phone OTP
+      const record = await this.prisma.verificationToken.findFirst({
+        where: { identifier: cleanPhone },
+      });
+
+      if (
+        !record ||
+        record.expires < new Date() ||
+        record.token !== hashedOtp
+      ) {
+        throw new UnauthorizedException('Invalid or expired phone OTP.');
+      }
+
+      await this.prisma.verificationToken.deleteMany({
+        where: { identifier: cleanPhone },
+      });
+
+      // 3. Ensure Phone isn't already used by someone else
+      const existingPhoneUser = await this.prisma.user.findUnique({
+        where: { phone: cleanPhone },
+      });
+
+      if (existingPhoneUser && existingPhoneUser.id !== payload.sub) {
+        throw new BadRequestException(
+          'This phone number is already registered to another account.',
+        );
+      }
+
+      // 4. Create or Update Final User
+      let user;
+
+      if (payload.sub) {
+        // Update existing legacy user
+        user = await this.prisma.user.update({
+          where: { id: payload.sub },
+          data: {
+            phone: cleanPhone,
+            lastLogin: new Date(),
+          },
+        });
+      } else {
+        // Create completely new user
+        user = await this.prisma.user.create({
+          data: {
+            email: payload.email,
+            phone: cleanPhone,
+            name: payload.email.split('@')[0],
+            role: 'USER',
+            lastLogin: new Date(),
+          },
+        });
+      }
+
+      // 5. Issue Final Tokens
+      return await this.issueTokens(res, user.id, user.email, user.role);
+    } catch (error) {
+      throw error instanceof BadRequestException ||
+        error instanceof UnauthorizedException
+        ? error
+        : new BadRequestException('Failed to complete phone verification');
+    }
+  }
+
+  /**
+   * Completes the profile by linking a phone number after initial email login
+   */
+  async completeProfile(
+    res: Response,
+    phone: string,
+    otp: string,
+    tempToken: string,
+  ) {
+    try {
+      // 1. Verify Temporary Token
+      let payload;
+      try {
+        payload = await this.jwtService.verifyAsync(tempToken);
+        if (!payload.isTempFlow) throw new Error('Invalid token type');
+      } catch (err) {
+        throw new UnauthorizedException(
+          'Temporary session expired. Please login again.',
+        );
+      }
+
+      const userId = payload.sub;
+      const cleanPhone = phone.replace(/\D/g, '');
+      const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
+
+      // 2. Verify Phone OTP
+      const record = await this.prisma.verificationToken.findFirst({
+        where: { identifier: cleanPhone },
+      });
+
+      if (
+        !record ||
+        record.expires < new Date() ||
+        record.token !== hashedOtp
+      ) {
+        throw new UnauthorizedException('Invalid or expired phone OTP.');
+      }
+
+      // 3. Prevent duplicate phone numbers
+      const existingUser = await this.prisma.user.findUnique({
+        where: { phone: cleanPhone },
+      });
+
+      if (existingUser && existingUser.id !== userId) {
+        throw new BadRequestException(
+          'This phone number is already registered to another account.',
+        );
+      }
+
+      // 4. Update user profile and clear OTP
+      await this.prisma.verificationToken.deleteMany({
+        where: { identifier: cleanPhone },
+      });
+
+      const updatedUser = await this.prisma.user.update({
+        where: { id: userId },
+        data: { phone: cleanPhone },
+      });
+
+      // 5. Issue standard final tokens
+      return await this.issueTokens(
+        res,
+        updatedUser.id,
+        updatedUser.email,
+        updatedUser.role,
+      );
+    } catch (error) {
+      throw error instanceof BadRequestException ||
+        error instanceof UnauthorizedException
+        ? error
+        : new BadRequestException('Failed to complete profile verification');
     }
   }
 
