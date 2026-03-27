@@ -1,11 +1,10 @@
 //src/profile/profile.controller.ts
 import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
 import { ProfileService } from './profile.service';
-import { AdminGuard } from 'src/auth/guards/admin.guard';
 import { AuthGuard } from '@nestjs/passport';
 
-@UseGuards(AuthGuard('jwt'), AdminGuard)
-@Controller('api/v1')
+@UseGuards(AuthGuard('jwt'))
+@Controller('profile')
 export class ProfileController {
   constructor(private readonly profileService: ProfileService) {}
 

@@ -28,7 +28,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!isValid) {
       throw new UnauthorizedException('Session invalidated or expired');
     }
-
+console.log(`JWT validated for user ${payload.sub} with email ${payload.email}`); 
     return { 
       userId: payload.sub, 
       email: payload.email, 

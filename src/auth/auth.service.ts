@@ -1,4 +1,9 @@
-import { Injectable, Logger, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  UnauthorizedException,
+  BadRequestException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
@@ -9,7 +14,6 @@ import { AppCacheService } from 'src/common/cache/cache.service';
 import { EmailService } from '../notifications/email.service';
 import { SmsService } from '../notifications/sms.service';
 import { BRAND } from '../config/brand.config';
-
 
 @Injectable()
 export class AuthService {
@@ -53,7 +57,8 @@ export class AuthService {
         role: user.role,
       };
 
-      const accessExpiry = this.config.get<string>('JWT_ACCESS_EXPIRY') || '15m';
+      const accessExpiry =
+        this.config.get<string>('JWT_ACCESS_EXPIRY') || '15m';
 
       const accessToken = await this.jwtService.signAsync(newPayload, {
         expiresIn: accessExpiry as any,
@@ -72,13 +77,14 @@ export class AuthService {
     }
   }
 
-  
   /**
    * Standard Email/Password login
    */
   async login(email: string, pass: string) {
     const cleanEmail = email.toLowerCase().trim();
-    const user = await this.prisma.user.findUnique({ where: { email: cleanEmail } });
+    const user = await this.prisma.user.findUnique({
+      where: { email: cleanEmail },
+    });
 
     if (!user || !(await bcrypt.compare(pass, user.password))) {
       throw new UnauthorizedException('Invalid credentials');
@@ -117,17 +123,26 @@ export class AuthService {
    * Generates and sends a 6-digit OTP
    */
   async sendOtp(identifier: string, type: 'phone' | 'email') {
-    // Normalize identifier to prevent case-sensitivity issues
-    const cleanIdentifier = identifier.includes('@') 
-      ? identifier.toLowerCase().trim() 
-      : identifier.trim();
+    // 1. Normalize identifier
+    const cleanIdentifier = identifier.includes('@')
+      ? identifier.toLowerCase().trim()
+      : identifier.replace(/\D/g, ''); // Strip non-numeric chars for phone
 
-    const otp = crypto.randomInt(100000, 1000000).toString();
+    // 🔥 2. ENTERPRISE STANDARD: Static Test Accounts for App Store Reviews
+    // Apple/Google reviewers cannot receive real SMS. You MUST whitelist a test number.
+    const isTestAccount =
+      cleanIdentifier === 'test@aenaturals.in' ||
+      cleanIdentifier === '9999999999';
+
+    // Generate secure random OTP, or use '123456' for whitelisted test accounts
+    const otp = isTestAccount
+      ? '123456'
+      : crypto.randomInt(100000, 1000000).toString();
     const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
     const expiryMinutes = this.config.get<number>('OTP_EXPIRY_MINUTES') || 5;
     const expires = new Date(Date.now() + expiryMinutes * 60 * 1000);
-    
-    // Clean up old tokens for this identifier
+
+    // 3. Database cleanup & storage
     await this.prisma.verificationToken.deleteMany({
       where: { identifier: cleanIdentifier },
     });
@@ -136,40 +151,56 @@ export class AuthService {
       data: { identifier: cleanIdentifier, token: hashedOtp, expires },
     });
 
-    this.logger.log(`[DEBUG] Generated OTP for ${cleanIdentifier}: ${otp} (expires in ${expiryMinutes} minutes)`);
-    
+    this.logger.log(`[DEBUG] Generated OTP for ${cleanIdentifier}`);
+
+    // 🔥 4. DEVELOPMENT BYPASS (Cost Saving Strategy)
+    // If NOT production, or if it is a Test Account, print to console and DO NOT send.
+    if (process.env.NODE_ENV !== 'production' || isTestAccount) {
+      this.logger.log(
+        `[DEV MODE / TEST ACCOUNT] Bypassing MSG91/SMTP. Use OTP: ${otp}`,
+      );
+      return { message: 'OTP generated (Dev Mode / Test Account)' };
+    }
+
+    // 🔥 5. PRODUCTION SEND EXECUTION
     const message = `Your AE Naturals Login OTP is ${otp}. It expires in ${expiryMinutes} minutes.`;
-    
+
     try {
       let isSent = false;
 
       if (type === 'phone') {
-        this.logger.log(`[DEBUG] Delegating to SmsService for ${cleanIdentifier}...`);
         isSent = await this.smsService.sendSMS(cleanIdentifier, message);
       } else {
-        this.logger.log(`[DEBUG] Delegating to EmailService for ${cleanIdentifier}...`);
-        const html = `<div style="font-family: Arial, sans-serif; padding: 20px;">
-                        <h2>AE Naturals Login</h2>
-                        <p>Your OTP is <strong style="font-size: 24px;">${otp}</strong>.</p>
-                        <p>It expires in ${expiryMinutes} minutes.</p>
+        const html = `<div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; border: 1px solid #eaeaea; border-radius: 10px;">
+                        <h2 style="color: #009688;">AE Naturals Secure Login</h2>
+                        <p style="color: #555;">Use the following OTP to log into your account. Do not share this with anyone.</p>
+                        <div style="background: #f9f9f9; padding: 15px; text-align: center; border-radius: 8px; margin: 20px 0;">
+                          <strong style="font-size: 32px; letter-spacing: 5px; color: #333;">${otp}</strong>
+                        </div>
+                        <p style="color: #888; font-size: 12px;">This code expires in ${expiryMinutes} minutes.</p>
                       </div>`;
-        isSent = await this.emailService.sendEmail(cleanIdentifier, 'Your AE Naturals Login OTP', html);
+        isSent = await this.emailService.sendEmail(
+          cleanIdentifier,
+          'Your AE Naturals Login OTP',
+          html,
+        );
       }
 
-      // 🔥 THE CRITICAL FIX: Check if the service actually returned true
       if (!isSent) {
-        this.logger.error(`[DEBUG] Service returned FALSE. The message failed to send to ${cleanIdentifier}.`);
-        throw new Error('All configured providers failed to deliver the message.');
+        this.logger.error(`Provider returned FALSE for ${cleanIdentifier}.`);
+        throw new Error('Delivery failed at provider level.');
       }
 
-      this.logger.log(`[DEBUG] Message confirmed sent to ${cleanIdentifier} by Provider.`);
       return { message: 'OTP sent successfully' };
-
     } catch (error) {
-      this.logger.error(`[DEBUG ERROR] Failed to send OTP to ${cleanIdentifier}: ${error.message}`);
-      
-      // Return a 400 Bad Request to the Frontend so it knows the OTP failed
-      throw new BadRequestException('Failed to send OTP. Ensure your providers are active and properly configured.');
+      this.logger.error(
+        `Critical OTP Send Failure for ${cleanIdentifier}: ${error.message}`,
+      );
+
+      // Generic error so malicious users don't know the exact internal failure reason
+      throw new BadRequestException(
+        'Failed to deliver OTP. Please check your number/email and try again.',
+      );
     }
   }
 
@@ -178,106 +209,191 @@ export class AuthService {
    */
   // src/auth/auth.service.ts
 
-async verifyOtp(res: Response, identifier: string, otp: string) {
-  const cleanIdentifier = identifier.includes('@') ? identifier.toLowerCase().trim() : identifier.trim();
-  const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
+  async verifyOtp(res: Response, identifier: string, otp: string) {
+    try {
+      console.log('🔍 Incoming verifyOtp request');
+      console.log('Identifier:', identifier);
+      console.log('OTP:', otp);
 
-  const record = await this.prisma.verificationToken.findFirst({
-    where: { identifier: cleanIdentifier, token: hashedOtp },
-  });
+      // 🔥 FIX 1: MUST EXACTLY MATCH `sendOtp` NORMALIZATION
+      // If it's a phone number, strip all non-numeric characters (spaces, dashes, +)
+      const cleanIdentifier = identifier.includes('@')
+        ? identifier.toLowerCase().trim()
+        : identifier.replace(/\D/g, '');
 
-  if (!record || record.expires < new Date()) {
-    throw new UnauthorizedException('Invalid or expired OTP');
-  }
+      console.log('✅ Clean Identifier:', cleanIdentifier);
 
-  await this.prisma.verificationToken.deleteMany({ where: { identifier: cleanIdentifier } });
+      const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
+      console.log('🔐 Hashed OTP:', hashedOtp);
 
-  const user = await this.prisma.user.upsert({
-    where: cleanIdentifier.includes('@') ? { email: cleanIdentifier } : { phone: cleanIdentifier },
-    update: { lastLogin: new Date() },
-    create: {
-      email: cleanIdentifier.includes('@') ? cleanIdentifier : null,
-      phone: cleanIdentifier.includes('@') ? null : cleanIdentifier,
-      name: cleanIdentifier.split('@')[0],
-      role: 'USER',
-      password: '', 
-    },
-  });
+      // 🔥 FIX 2: Check if ANY record exists for this identifier first
+      // This tells us if the user actually requested an OTP before verifying
+      const record = await this.prisma.verificationToken.findFirst({
+        where: { identifier: cleanIdentifier },
+      });
 
-  // 🔥 GENERATE SESSION
-  return this.issueTokens(res, user.id, user.email, user.role);
-}
+      console.log('📦 DB Record Found for Identifier:', record ? 'Yes' : 'No');
 
-/**
- * REFRESH TOKEN ROTATION (The Big Company Way)
- */
-async refreshTokens(req: Request, res: Response) {
-  const oldRefreshToken = req.cookies['refresh_token'];
-  if (!oldRefreshToken) throw new UnauthorizedException();
+      if (!record) {
+        console.error(
+          '❌ No OTP was requested, or it expired and was deleted.',
+        );
+        throw new UnauthorizedException(
+          'No active OTP found. Please request a new one.',
+        );
+      }
 
-  try {
-    const payload = await this.jwtService.verifyAsync(oldRefreshToken);
-    
-    // 1. Check if session is still active in Redis
-    const sessionKey = `session:${payload.sub}`;
-    const isValid = await this.cacheService.get(sessionKey);
-    
-    if (!isValid) {
-      this.logger.warn(`Potential Breach: Revoked token used for user ${payload.sub}`);
-      throw new UnauthorizedException();
+      // 🔥 FIX 3: Check Expiration
+      if (record.expires < new Date()) {
+        console.error('⏰ OTP expired at:', record.expires);
+        // Clean up the expired token
+        await this.prisma.verificationToken.deleteMany({
+          where: { identifier: cleanIdentifier },
+        });
+        throw new UnauthorizedException(
+          'OTP has expired. Please request a new one.',
+        );
+      }
+
+      // 🔥 FIX 4: Actually compare the hashes
+      if (record.token !== hashedOtp) {
+        console.error('❌ OTP mismatch. User entered wrong code.');
+        throw new UnauthorizedException('Invalid OTP code. Please try again.');
+      }
+
+      console.log('✅ OTP is valid');
+
+      // Clean up used OTP so it cannot be used again
+      await this.prisma.verificationToken.deleteMany({
+        where: { identifier: cleanIdentifier },
+      });
+
+      console.log('🗑️ Deleted OTP records for identifier');
+
+      const user = await this.prisma.user.upsert({
+        where: cleanIdentifier.includes('@')
+          ? { email: cleanIdentifier }
+          : { phone: cleanIdentifier },
+        update: { lastLogin: new Date() },
+        create: {
+          email: cleanIdentifier.includes('@') ? cleanIdentifier : null,
+          phone: cleanIdentifier.includes('@') ? null : cleanIdentifier,
+          name: cleanIdentifier.includes('@')
+            ? cleanIdentifier.split('@')[0]
+            : cleanIdentifier,
+          role: 'USER',
+          password: '',
+        },
+      });
+
+      console.log('👤 User Upserted:', user.id);
+
+      // 🔥 GENERATE SESSION
+      const tokens = await this.issueTokens(
+        res,
+        user.id,
+        user.email,
+        user.role,
+      );
+
+      console.log('🎟️ Tokens Issued Successfully');
+
+      return tokens;
+    } catch (error) {
+      console.error('🔥 verifyOtp ERROR:', error.message);
+
+      throw new UnauthorizedException(
+        error?.message || 'OTP verification failed',
+      );
     }
-
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
-    if (!user) throw new UnauthorizedException();
-
-    // 2. Issue NEW tokens and ROTATE the refresh cookie
-    return this.issueTokens(res, user.id, user.email, user.role);
-  } catch (e) {
-    throw new UnauthorizedException('Session expired');
   }
-}
 
-/**
- * Internal Helper: Issues Access Token (RAM) and Refresh Token (HTTP-Only Cookie)
- */
-/**
- * Internal Helper: Issues Access Token (RAM) and Refresh Token (HTTP-Only Cookie)
- */
-private async issueTokens(res: Response, userId: string, email: string | null, role: string) {
-  // Use a fallback if email is null (common in phone-only OTP login)
-  const identifier = email || BRAND.name; // Use brand name as identifier for phone logins without email  
+  /**
+   * REFRESH TOKEN ROTATION (The Big Company Way)
+   */
+  async refreshTokens(req: Request, res: Response) {
+    const oldRefreshToken = req.cookies['refresh_token'];
+    if (!oldRefreshToken) throw new UnauthorizedException();
 
-  const payload = { 
-    sub: userId, 
-    email: identifier, 
-    role, 
-    tenantId: 'default-store' 
-  };
+    try {
+      const payload = await this.jwtService.verifyAsync(oldRefreshToken);
 
-  const accessToken = await this.jwtService.signAsync(payload, { 
-    expiresIn: this.config.get('JWT_ACCESS_EXPIRY') || '15m' 
-  });
+      // 1. Check if session is still active in Redis
+      const sessionKey = `session:${payload.sub}`;
+      const isValid = await this.cacheService.get(sessionKey);
 
-  const refreshToken = await this.jwtService.signAsync({ sub: userId }, { 
-    expiresIn: this.config.get('JWT_REFRESH_EXPIRY') || '7d' 
-  });
+      if (!isValid) {
+        this.logger.warn(
+          `Potential Breach: Revoked token used for user ${payload.sub}`,
+        );
+        throw new UnauthorizedException();
+      }
 
-  // SET SECURE COOKIE
-  res.cookie('refresh_token', refreshToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production', 
-    sameSite: 'strict',
-    maxAge: 7 * 24 * 60 * 60 * 1000, 
-    path: '/', 
-  });
+      const user = await this.prisma.user.findUnique({
+        where: { id: payload.sub },
+      });
+      if (!user) throw new UnauthorizedException();
 
-  await this.cacheService.set(`session:${userId}`, 'active', 7 * 24 * 60 * 60);
+      // 2. Issue NEW tokens and ROTATE the refresh cookie
+      return this.issueTokens(res, user.id, user.email, user.role);
+    } catch (e) {
+      throw new UnauthorizedException('Session expired');
+    }
+  }
 
-  return {
-    access_token: accessToken,
-    user: { id: userId, email: identifier, role },
-  };
-}
+  /**
+   * Internal Helper: Issues Access Token (RAM) and Refresh Token (HTTP-Only Cookie)
+   */
+  /**
+   * Internal Helper: Issues Access Token (RAM) and Refresh Token (HTTP-Only Cookie)
+   */
+  private async issueTokens(
+    res: Response,
+    userId: string,
+    email: string | null,
+    role: string,
+  ) {
+    // Use a fallback if email is null (common in phone-only OTP login)
+    const identifier = email || BRAND.name; // Use brand name as identifier for phone logins without email
+
+    const payload = {
+      sub: userId,
+      email: identifier,
+      role,
+      tenantId: 'default-store',
+    };
+
+    const accessToken = await this.jwtService.signAsync(payload, {
+      expiresIn: this.config.get('JWT_ACCESS_EXPIRY') || '15m',
+    });
+
+    const refreshToken = await this.jwtService.signAsync(
+      { sub: userId },
+      {
+        expiresIn: this.config.get('JWT_REFRESH_EXPIRY') || '7d',
+      },
+    );
+
+    // SET SECURE COOKIE
+    res.cookie('refresh_token', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
+    await this.cacheService.set(
+      `session:${userId}`,
+      'active',
+      7 * 24 * 60 * 60,
+    );
+
+    return {
+      access_token: accessToken,
+      user: { id: userId, email: identifier, role },
+    };
+  }
 
   /**
    * Clears the session from Redis
@@ -304,9 +420,11 @@ private async issueTokens(res: Response, userId: string, email: string | null, r
     };
 
     const accessExpiry = this.config.get<string>('JWT_ACCESS_EXPIRY') || '15m';
-    const refreshExpiry = this.config.get<string>('JWT_REFRESH_EXPIRY') || '30d';
+    const refreshExpiry =
+      this.config.get<string>('JWT_REFRESH_EXPIRY') || '30d';
     const redisTtl = this.config.get<number>('REDIS_SESSION_TTL') || 2592000;
-    const cookieMaxAge = this.config.get<number>('COOKIE_MAX_AGE') || 2592000000;
+    const cookieMaxAge =
+      this.config.get<number>('COOKIE_MAX_AGE') || 2592000000;
 
     const accessToken = await this.jwtService.signAsync(payload, {
       expiresIn: accessExpiry as any,
@@ -326,9 +444,15 @@ private async issueTokens(res: Response, userId: string, email: string | null, r
     });
 
     try {
-      await this.cacheService.set(`session:${userId}`, 'active', Number(redisTtl));
+      await this.cacheService.set(
+        `session:${userId}`,
+        'active',
+        Number(redisTtl),
+      );
     } catch (err) {
-      this.logger.error(`[REDIS ERROR] Failed to track admin session: ${err.message}`);
+      this.logger.error(
+        `[REDIS ERROR] Failed to track admin session: ${err.message}`,
+      );
     }
 
     return accessToken;

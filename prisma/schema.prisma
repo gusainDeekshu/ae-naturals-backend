@@ -34,6 +34,12 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
 // models
 model User {
   id        String     @id @default(cuid())
@@ -41,6 +47,7 @@ model User {
   phone     String?    @unique // Added for mobile authentication
   password  String
   name      String
+  gender    Gender?
   role      Role       @default(USER)
   lastLogin DateTime   @default(now()) // Added for session tracking
   orders    Order[]

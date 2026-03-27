@@ -30,6 +30,7 @@ import { OrdersModule } from './orders/orders.module';
 import { ProvidersModule } from './providers/providers.module';
 import { ProvidersController } from './admin/providers.controller';
 import { EncryptionModule } from './common/security/encryption.module';
+import { ProfileModule } from './profile/profile.module';
 
 @Module({
   imports: [
@@ -62,7 +63,8 @@ import { EncryptionModule } from './common/security/encryption.module';
     OrdersModule,
     CartModule,
     ProvidersModule,
-    EncryptionModule
+    EncryptionModule,
+    ProfileModule
   ],
   controllers: [
     HealthController,
