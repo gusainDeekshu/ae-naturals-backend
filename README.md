@@ -102,6 +102,10 @@ JWT_SECRET=your_jwt_secret
 ```bash
 pnpm exec prisma generate
 pnpm run db:deploy
+
+npx prisma format
+npx prisma db push
+npx prisma generate
 ```
 
 ### 2. Messaging Test (Dev Only)

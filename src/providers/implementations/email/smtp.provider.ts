@@ -1,5 +1,3 @@
-// src/providers/implementations/email/smtp.provider.ts
-
 import { EmailProviderInterface } from '../../interfaces/provider.interfaces';
 import * as nodemailer from 'nodemailer';
 
@@ -9,21 +7,18 @@ export class SmtpProvider implements EmailProviderInterface {
 
   constructor(private config: any) {
     const password = config.pass || config.password;
-
     if (!config.host || !config.user || !password) {
       throw new Error('SMTP configuration is incomplete.');
     }
-    console.log('SMTP Config:', {
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      pass: password, // Don't log the actual password
-    });
-    this.from = config.user;
+
+    // 🔥 FIX: Add a proper Display Name so Google doesn't think it's a spam bot
+    this.from = `"AE Naturals Admin" <${config.user}>`;
 
     this.transporter = nodemailer.createTransport({
       host: config.host,
-      port: config.port,
+      port: Number(config.port),
+      // 🔥 FIX: Ensure strings like "true" are properly converted to boolean
+      secure: String(config.secure) === 'true', 
       auth: {
         user: config.user,
         pass: password,

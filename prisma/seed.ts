@@ -91,7 +91,7 @@ async function main() {
         ]
       },
       rating: 4.9,
-      reviews: 567
+      reviewCount: 567
     }
   });
 

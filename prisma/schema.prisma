@@ -36,19 +36,22 @@ enum OrderStatus {
 
 // models
 model User {
-  id        String    @id @default(cuid())
-  email     String?   @unique // Changed to optional for phone-only users
-  phone     String?   @unique // Added for mobile authentication
+  id        String     @id @default(cuid())
+  email     String?    @unique // Changed to optional for phone-only users
+  phone     String?    @unique // Added for mobile authentication
   password  String
   name      String
-  role      Role      @default(USER)
-  lastLogin DateTime  @default(now()) // Added for session tracking
+  role      Role       @default(USER)
+  lastLogin DateTime   @default(now()) // Added for session tracking
   orders    Order[]
   cart      Cart?
   // Add these two lines to satisfy the relation requirements
   accounts  Account[]
   sessions  Session[]
-  createdAt DateTime  @default(now())
+  addresses Address[]
+  wishlist  Wishlist[]
+  reviews   Review[]
+  createdAt DateTime   @default(now())
 }
 
 model Store {
@@ -89,16 +92,18 @@ model Product {
   deliveryInfo     String[] // ["Same day delivery", "Free over ₹999"]
 
   // Flipkart-style Attribute System
-  attributes ProductAttribute[]
-  variants   ProductVariant[]
-  cartItems  CartItem[]
-  orderItems OrderItem[]
-  category   Category           @relation(fields: [categoryId], references: [id])
-  categoryId String
-  rating     Float              @default(4.5)
-  reviews    Int                @default(0)
-  isActive   Boolean            @default(true)
-  createdAt  DateTime           @default(now())
+  attributes  ProductAttribute[]
+  variants    ProductVariant[]
+  cartItems   CartItem[]
+  orderItems  OrderItem[]
+  category    Category           @relation(fields: [categoryId], references: [id])
+  categoryId  String
+  rating      Float              @default(4.5)
+  reviewCount Int                @default(0)
+  wishlist    Wishlist[]
+  reviews     Review[]
+  isActive    Boolean            @default(true)
+  createdAt   DateTime           @default(now())
 }
 
 model ProductAttribute {
@@ -140,7 +145,7 @@ model OrderItem {
   orderId   String
   productId String
   quantity  Int
-  price     Float   // Snapshot of price at purchase
+  price     Float // Snapshot of price at purchase
   order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product   Product @relation(fields: [productId], references: [id])
 }
@@ -213,11 +218,10 @@ model CartItem {
   @@unique([cartId, productId])
 }
 
-
 model ProviderConfig {
   id        String       @id @default(cuid())
   type      ProviderType
-  provider  String       // e.g., "SMTP", "AWS_SES", "FAST2SMS", "RAZORPAY"
+  provider  String // e.g., "SMTP", "AWS_SES", "FAST2SMS", "RAZORPAY"
   isActive  Boolean      @default(false)
   priority  Int          @default(1) // 1 is highest priority
   config    String       @db.Text // Store ENCRYPTED stringified JSON
@@ -229,10 +233,51 @@ model ProviderConfig {
 
 model NotificationLog {
   id        String   @id @default(cuid())
-  type      String   // "EMAIL", "SMS"
+  type      String // "EMAIL", "SMS"
   provider  String
   recipient String
-  status    String   // "SUCCESS", "FAILED"
+  status    String // "SUCCESS", "FAILED"
   error     String?  @db.Text
   createdAt DateTime @default(now())
+}
+
+model Address {
+  id          String   @id @default(uuid())
+  userId      String
+  name        String
+  phone       String
+  addressLine String
+  city        String
+  state       String
+  pincode     String
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Wishlist {
+  id        String   @id @default(uuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  userId    String
+  productId String
+  rating    Int      @default(5) // 1 to 5
+  comment   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
