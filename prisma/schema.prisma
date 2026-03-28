@@ -64,6 +64,8 @@ model Store {
   id            String   @id @default(cuid())
   name          String
   slug          String   @unique
+  domain        String?  @unique // e.g., "flowerfairy.com" or "store1.localhost"
+  isDefault     Boolean  @default(false) // Fallback store
   industry      String
   paymentConfig Json?
   themeConfig   Json?

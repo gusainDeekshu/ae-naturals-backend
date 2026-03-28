@@ -1,31 +1,57 @@
-import { Controller, Get, Query, Param, NotFoundException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Query,
+  Param,
+  NotFoundException,
+  Req,
+} from '@nestjs/common';
+
+import * as express from 'express';
 import { ProductsService } from './products.service';
 
 @Controller('products')
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
-  // src/products/products.controller.ts
+  // ✅ DYNAMIC STORE CATALOG
+  @Get('catalog')
+  async getDynamicStoreCatalog(
+    @Req() req: express.Request,
+    @Query('category') categorySlug?: string,
+  ) {
+    const resolvedSlug =
+      await this.productsService.resolveStoreSlug(req);
+
+    return this.productsService.getStoreCatalog(
+      resolvedSlug,
+      categorySlug,
+    );
+  }
+
+  // ✅ BACKWARD COMPATIBILITY
   @Get('catalog/:storeSlug')
   async getStoreCatalog(
     @Param('storeSlug') storeSlug: string,
-    @Query('category') categorySlug?: string, // Allow optional category filtering
+    @Query('category') categorySlug?: string,
   ) {
-    return this.productsService.getStoreCatalog(storeSlug, categorySlug);
+    return this.productsService.getStoreCatalog(
+      storeSlug,
+      categorySlug,
+    );
   }
 
-
+  // ✅ GET ALL PRODUCTS (DYNAMIC)
+  // 3. 🚨 THE CULPRIT: FIXED BASE GET ROUTE 🚨
   @Get()
-  async findAll(@Query('category') category?: string) {
+  async findAll(@Req() req: express.Request, @Query('category') category?: string) {
+    // Dynamically resolve the store instead of hardcoding 'flower-fairy-dehradun'
+    const resolvedSlug = await this.productsService.resolveStoreSlug(req);
     
-    // 1. Fetch the catalog (cast as 'any' or your Store interface to access properties)
-    const catalog = (await this.productsService.getStoreCatalog(
-      'flower-fairy-dehradun',
-    )) as any;
+    const catalog = (await this.productsService.getStoreCatalog(resolvedSlug)) as any;
 
-    // 2. Safely access products from the cached store object
     if (!catalog || !catalog.products) {
-      console.warn('No catalog or products found for store: flower-fairy-dehradun');
+      console.warn(`No catalog or products found for store: ${resolvedSlug}`);
       return [];
     }
 
@@ -36,17 +62,23 @@ export class ProductsController {
     return catalog.products;
   }
 
+  // ✅ SINGLE PRODUCT
+  @Get(':slug')
+  async findOne(@Param('slug') slug: string) {
+    const product =
+      await this.productsService.getProductBySlug(slug);
 
-@Get(':slug') // This specifically catches GET /api/v1/products/amal-sanders
-async findOne(@Param('slug') slug: string) {
-  const product = await this.productsService.getProductBySlug(slug);
-  if (!product) {
-    throw new NotFoundException(`Product with slug ${slug} not found`);
+    if (!product) {
+      throw new NotFoundException(
+        `Product with slug ${slug} not found`,
+      );
+    }
+
+    return product;
   }
-  return product;
-}
 
-@Get('similar/:category')
+  // ✅ SIMILAR PRODUCTS
+  @Get('similar/:category')
   async findSimilar(@Param('category') category: string) {
     return this.productsService.getSimilarProducts(category);
   }
