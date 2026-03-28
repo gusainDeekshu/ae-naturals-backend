@@ -93,7 +93,7 @@ export class ProductsService {
         category: true,
         attributes: true,
         variants: true,
-        extra: true,
+        extra: true, // ✅ Ensures Extra details/A+ Content loads on the product page
       },
     });
 
@@ -157,11 +157,23 @@ export class ProductsService {
         data: {
           ...rest,
           slug,
-          ...(extra && {
-          extra: {
-            create: extra,
-          },
-        }),
+          // ✅ Correctly mapped creation for 1-to-1 relation with A+ content JSON
+          ...(extra && Object.keys(extra).length > 0 && {
+            extra: {
+              create: {
+                safetyInfo: extra.safetyInfo,
+                ingredients: extra.ingredients,
+                directions: extra.directions,
+                legalDisclaimer: extra.legalDisclaimer,
+                manufacturer: extra.manufacturer,
+                countryOfOrigin: extra.countryOfOrigin,
+                weight: extra.weight,
+                dimensions: extra.dimensions,
+                genericName: extra.genericName,
+                aPlusContent: extra.aPlusContent || [], // JSON field
+              },
+            },
+          }),
           careInstructions,
           deliveryInfo,
           attributes: {
@@ -179,7 +191,7 @@ export class ProductsService {
           },
         },
         include: {
-          extra: true,
+          extra: true, // Return created extra content
           attributes: true,
           variants: true,
           category: true,
@@ -230,23 +242,42 @@ export class ProductsService {
 
     if (removedImages.length) {
       Promise.all(
-        removedImages.map((url) =>
-          this.cloudinary.deleteImage(url),
-        ),
-      ).catch((e) =>
-        this.logger.error(`Cloudinary cleanup error`, e),
-      );
+        removedImages.map((url) => this.cloudinary.deleteImage(url)),
+      ).catch((e) => this.logger.error(`Cloudinary cleanup error`, e));
     }
 
     const updated = await this.prisma.product.update({
       where: { id },
       data: {
         ...rest,
+        // ✅ Use UPSERT: Creates 'extra' if the product didn't have it, updates if it does
         ...(extra && {
           extra: {
             upsert: {
-              create: extra,
-              update: extra,
+              create: {
+                safetyInfo: extra.safetyInfo,
+                ingredients: extra.ingredients,
+                directions: extra.directions,
+                legalDisclaimer: extra.legalDisclaimer,
+                manufacturer: extra.manufacturer,
+                countryOfOrigin: extra.countryOfOrigin,
+                weight: extra.weight,
+                dimensions: extra.dimensions,
+                genericName: extra.genericName,
+                aPlusContent: extra.aPlusContent || [],
+              },
+              update: {
+                safetyInfo: extra.safetyInfo,
+                ingredients: extra.ingredients,
+                directions: extra.directions,
+                legalDisclaimer: extra.legalDisclaimer,
+                manufacturer: extra.manufacturer,
+                countryOfOrigin: extra.countryOfOrigin,
+                weight: extra.weight,
+                dimensions: extra.dimensions,
+                genericName: extra.genericName,
+                aPlusContent: extra.aPlusContent || [],
+              },
             },
           },
         }),
@@ -268,6 +299,7 @@ export class ProductsService {
         },
       },
       include: {
+        extra: true, // ✅ Ensure Admin Panel receives the updated extra data back
         attributes: true,
         variants: true,
         category: true,
@@ -295,12 +327,8 @@ export class ProductsService {
       this.logger.log(`🧹 Cleaning ${product.images.length} images`);
 
       Promise.all(
-        product.images.map((url) =>
-          this.cloudinary.deleteImage(url),
-        ),
-      ).catch((e) =>
-        this.logger.error(`Cloudinary delete error`, e),
-      );
+        product.images.map((url) => this.cloudinary.deleteImage(url)),
+      ).catch((e) => this.logger.error(`Cloudinary delete error`, e));
     }
 
     await this.prisma.product.delete({ where: { id } });
@@ -335,6 +363,7 @@ export class ProductsService {
         store: true,
         attributes: true,
         variants: true,
+        extra: true, // ✅ Helpful for admin listing exports
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -345,37 +374,69 @@ export class ProductsService {
    * Production-Grade Store Resolver
    * Extracts domain, strips ports, and handles fallbacks securely.
    */
-  async resolveStoreSlug(req: Request): Promise<string> {
-    // 1. Get raw domain from Custom Header > Origin > Host
-    let rawDomain = 
-      (req.headers['x-tenant-domain'] as string) || 
-      (req.headers.origin ? new URL(req.headers.origin).hostname : null) || 
-      (req.headers.host as string);
+ async resolveStoreSlug(req: Request): Promise<string> {
+  const start = Date.now();
 
-    // 2. Clean the domain (Strip ports like ':3000' or ':4000')
-    const searchDomain = rawDomain ? rawDomain.split(':')[0] : null;
+  this.logger.log('🌐 [Store Resolver] Incoming request');
 
-    // 3. Try to find the exact store by Domain
-    if (searchDomain) {
-      const storeByDomain = await this.prisma.store.findFirst({
-        where: { domain: searchDomain }
-      });
-      
-      if (storeByDomain) return storeByDomain.slug;
-    }
+  // 1. Extract raw domain
+  const rawDomain =
+    (req.headers['x-tenant-domain'] as string) ||
+    (req.headers.origin
+      ? new URL(req.headers.origin).hostname
+      : null) ||
+    (req.headers.host as string);
 
-    // 4. Fallback to the Default Store (Crucial for Local Dev & Unmapped Domains)
-    const defaultStore = await this.prisma.store.findFirst({
-      where: { isDefault: true }
+  this.logger.debug(`📥 Raw Domain: ${rawDomain}`);
+
+  // 2. Clean domain (remove port)
+  const searchDomain = rawDomain ? rawDomain.split(':')[0] : null;
+
+  this.logger.debug(`🧹 Clean Domain: ${searchDomain}`);
+
+  // 3. Try domain-based resolution
+  if (searchDomain) {
+    this.logger.log(`🔍 Searching store by domain: ${searchDomain}`);
+
+    const storeByDomain = await this.prisma.store.findFirst({
+      where: { domain: searchDomain },
     });
 
-    if (defaultStore) {
-      // Optional: Log once to keep console clean, but warn that fallback is active
-      console.warn(`[ProductsService] Domain '${searchDomain}' not found. Using fallback store: ${defaultStore.slug}`);
-      return defaultStore.slug;
+    if (storeByDomain) {
+      this.logger.log(
+        `✅ Store found by domain → ${storeByDomain.slug} (${storeByDomain.name})`,
+      );
+      this.logger.log(`⏱ Resolve Time: ${Date.now() - start}ms`);
+      return storeByDomain.slug;
     }
 
-    // 5. Hard failure if database has zero stores configured properly
-    throw new BadRequestException('Critical: No store mapped to this domain and no default store is configured in the database.');
+    this.logger.warn(`⚠️ No store mapped to domain: ${searchDomain}`);
+  } else {
+    this.logger.warn(`⚠️ No domain extracted from request`);
   }
+
+  // 4. Fallback to default store
+  this.logger.log(`🔄 Trying fallback to default store`);
+
+  const defaultStore = await this.prisma.store.findFirst({
+    where: { isDefault: true },
+  });
+
+  if (defaultStore) {
+    this.logger.warn(
+      `⚠️ Using DEFAULT store → ${defaultStore.slug} (${defaultStore.name})`,
+    );
+    this.logger.log(`⏱ Resolve Time: ${Date.now() - start}ms`);
+    return defaultStore.slug;
+  }
+
+  // 5. Critical failure
+  this.logger.error(`❌ CRITICAL: No store found for domain or default`);
+  this.logger.error(`👉 Raw Domain: ${rawDomain}`);
+  this.logger.error(`👉 Clean Domain: ${searchDomain}`);
+
+  throw new BadRequestException(
+    'Critical: No store mapped to this domain and no default store is configured in the database.',
+  );
+}
 }

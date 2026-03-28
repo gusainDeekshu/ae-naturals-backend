@@ -34,9 +34,9 @@ async function main() {
     where: { slug: 'default-store' },
     update: {},
     create: {
-      name: 'Flower Fairy Store',
+      name: 'AE Naturals Store',
       slug: 'default-store',
-      industry: 'flowers',
+      industry: 'Health & Wellness',
     },
   });
 
